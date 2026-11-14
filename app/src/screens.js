@@ -17,9 +17,31 @@ function useAction(after) {
   const run = async (fn) => { setErr(''); try { await fn(); after && (await after()); } catch (e) { setErr(e.message); } };
   return [err, run, setErr];
 }
-
+function MedCard({ med, onTake, lang }) {
+  const [info, setInfo] = useState('');
+  const [loading, setLoading] = useState(false);
+  const ask = async () => {
+    if (info) { setInfo(''); return; }
+    setLoading(true);
+    try { const r = await api('/medicine-info', { method: 'POST', body: { name: med.name, lang } }); setInfo(r.info); }
+    catch (e) { setInfo('Could not load info. Please try again.'); }
+    setLoading(false);
+  };
+  return (
+    <Card>
+      <Txt bold size={20}>{med.name}</Txt>
+      <Txt mute>{med.time_of_day}{med.note ? ' · ' + med.note : ''}</Txt>
+      <View style={{ marginTop: 10, flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+        {med.taken ? <Txt bold>✓ Taken today</Txt> : <Btn kind="pri" small title="I took it" onPress={onTake} />}
+        <Btn small title={loading ? '...' : info ? 'Hide info' : '🤖 Ask AI'} onPress={ask} />
+      </View>
+      {!!info && <Txt style={{ marginTop: 10, lineHeight: 24 }}>{info}</Txt>}
+    </Card>
+  );
+}
 export function Meds({ back }) {
   const t = useT();
+  const { lang } = useContext(Prefs);
   const [list, load, lerr] = useLoad('/medicines');
   const [err, run, setErr] = useAction(load);
   const [name, setName] = useState(''); const [time, setTime] = useState('08:00');
@@ -32,14 +54,8 @@ export function Meds({ back }) {
     <Screen title={t('meds')} onBack={back}>
       <Err msg={lerr} />
       {list?.length === 0 && <Txt mute>No medicines yet. Add your first one below.</Txt>}
-      {list?.map((m) => (
-        <Card key={m.id}>
-          <Txt bold size={20}>{m.name}</Txt>
-          <Txt mute>{m.time_of_day}{m.note ? ' · ' + m.note : ''}</Txt>
-          <View style={{ marginTop: 10 }}>
-            {m.taken ? <Txt bold>✓ Taken today</Txt> : <Btn kind="pri" small title="I took it" onPress={() => run(() => api(`/medicines/${m.id}/taken`, { method: 'POST' }))} />}
-          </View>
-        </Card>
+        {list?.map((m) => (
+        <MedCard key={m.id} med={m} onTake={() => run(() => api(`/medicines/${m.id}/taken`, { method: 'POST' }))} lang={lang} />
       ))}
       <Txt bold size={22} style={{ marginTop: 20 }}>Add a medicine</Txt>
       <Field label="Name and dose" value={name} onChangeText={setName} maxLength={80} />

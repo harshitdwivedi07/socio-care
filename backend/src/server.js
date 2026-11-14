@@ -228,34 +228,49 @@ app.get('/audit', auth, wrap(async (req, res) => {
   res.json((await q('select actor_id=owner_id as by_me,action,created_at from audit_log where owner_id=$1 order by id desc limit 50', [req.uid])).rows);
 }));
 
-// ---------- Helper (AI, with safe fallback) ----------
+// ---------- Helper (Groq AI, with safe fallback) ----------
 const helperLimit = rateLimit({ windowMs: 60 * 1000, limit: 10 });
 const LANG = { en: 'English', hi: 'Hindi', te: 'Telugu' };
 const SYS = 'You are the friendly helper inside Socio Care, an app for elderly people in India. Answer in 1 to 3 short, simple sentences. Help with using the app (medicines, appointments, SOS, family, health log) and general wellbeing tips. Never diagnose and never suggest doses or changing medicines; for symptoms or medicine questions tell the person to ask their doctor or pharmacist, and for emergencies tell them to press SOS or call 112. Reply in ';
+const MED_SYS = 'You are a helpful medicine information assistant for elderly people in India. When given a medicine name, explain in 2 to 4 short simple sentences: what it is commonly used for, common side effects to watch for, and whether it should be taken with or without food. Never suggest doses or tell anyone to change their medicine. Always end by saying: Please confirm with your doctor or pharmacist. Reply in ';
 function rule(m) {
   m = m.toLowerCase();
   if (/pain|chest|breath|dizz|faint|bleed|stroke/.test(m)) return 'This may be serious. Press SOS or call 112 now. For other symptoms, please speak to your doctor.';
-  if (/medic|tablet|pill|dawa|dose/.test(m)) return 'Open Medicines to see today’s doses and tap “I took it”. For questions about a medicine, please ask your doctor or pharmacist.';
+  if (/medic|tablet|pill|dawa|dose/.test(m)) return 'Open Medicines to see today\'s doses and tap "I took it". For questions about a medicine, please ask your doctor or pharmacist.';
   if (/doctor|appoint|visit/.test(m)) return 'Open Appointments to book or see your next visit.';
   if (/family|son|daughter|caregiver|invite/.test(m)) return 'Open Family to invite someone. You choose what they can see, and you can remove them anytime.';
   if (/sos|emergency|help/.test(m)) return 'Press the big white SOS tile. You have 5 seconds to cancel. In a real emergency also call 112.';
   return 'I can help with medicines, appointments, family and SOS. Try asking about one of them.';
 }
+async function groq(systemPrompt, userMessage) {
+  const key = process.env.GROQ_API_KEY;
+  if (!key) { console.error('groq: GROQ_API_KEY is not set'); return null; }
+  try {
+    const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'authorization': `Bearer ${key}` },
+      body: JSON.stringify({
+        model: process.env.GROQ_MODEL || 'openai/gpt-oss-120b',
+        reasoning_effort: 'low',
+        max_tokens: 800,
+        messages: [
+          { role: 'system', content: systemPrompt + ' Use plain text only. Never use emojis, markdown, asterisks, bullet points or headings.' },
+          { role: 'user', content: userMessage },
+        ],
+      }),
+    });
+    const j = await r.json();
+    if (!r.ok) { console.error('groq error:', r.status, j.error?.message); return null; }
+    return j.choices?.[0]?.message?.content || null;
+  } catch (e) { console.error('groq:', e.message); return null; }
+}
 app.post('/assistant', auth, helperLimit, body(z.object({ message: z.string().trim().min(1).max(300), lang: z.enum(['en', 'hi', 'te']).default('en') })), wrap(async (req, res) => {
-  const key = process.env.ANTHROPIC_API_KEY;
-  if (key) {
-    try {
-      const r = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({ model: process.env.ASSISTANT_MODEL || 'claude-haiku-5-5', max_tokens: 300, system: SYS + LANG[req.data.lang] + '.', messages: [{ role: 'user', content: req.data.message }] }),
-      });
-      const j = await r.json();
-      const text = j.content?.find((c) => c.type === 'text')?.text;
-      if (text) return res.json({ reply: text });
-    } catch (e) { console.error('assistant:', e.message); }
-  }
-  res.json({ reply: rule(req.data.message) }); // only the typed question is ever sent out, never stored health data
+  const text = await groq(SYS + LANG[req.data.lang] + '.', req.data.message);
+  res.json({ reply: text || rule(req.data.message) });
+}));
+app.post('/medicine-info', auth, helperLimit, body(z.object({ name: z.string().trim().min(1).max(80), lang: z.enum(['en', 'hi', 'te']).default('en') })), wrap(async (req, res) => {
+  const text = await groq(MED_SYS + LANG[req.data.lang] + '.', `Tell me about this medicine: ${req.data.name}`);
+  res.json({ info: text || 'Please ask your doctor or pharmacist about this medicine.' });
 }));
 
 // ---------- Missed-dose check (alerts consenting caregivers) ----------
