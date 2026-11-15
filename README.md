@@ -102,5 +102,4 @@ Never commit `.env` files. They are listed in `.gitignore`.
 ## Credits
 
 - Built by **GOWRI SRI**
-- Thanks to **HARSHIT DWIVEDI** for [what he did, e.g. testing, ideas, the Android build]
 - Built with help from AI coding assistants
